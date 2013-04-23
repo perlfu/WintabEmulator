@@ -1,0 +1,1230 @@
+/*------------------------------------------------------------------------------
+WintabEmulator - WintabEmulator.cpp
+Copyright (c) 2013 Carl G. Ritson <critson@perlfu.co.uk>
+
+This file may be freely used, copied, or distributed without compensation 
+or licensing restrictions, but is done so without any warranty or implication
+of merchantability or fitness for any particular purpose.
+------------------------------------------------------------------------------*/
+
+#include "stdafx.h"
+#include <assert.h>
+
+#define API __declspec(dllexport) WINAPI
+#include "wintab.h"
+#include "Emulation.h"
+
+static FILE *fhLog      = NULL;
+static BOOL initialised = FALSE;
+static BOOL logging     = TRUE;
+static BOOL debug       = TRUE;
+static BOOL useEmulation= TRUE;
+static WTPKT packetData = 0;
+static WTPKT packetMode = 0;
+
+#define WTAPI WINAPI
+
+typedef UINT ( WTAPI * WTINFOA ) ( UINT, UINT, LPVOID );
+typedef HCTX ( WTAPI * WTOPENA )( HWND, LPLOGCONTEXTA, BOOL );
+typedef UINT ( WTAPI * WTINFOW ) ( UINT, UINT, LPVOID );
+typedef HCTX ( WTAPI * WTOPENW )( HWND, LPLOGCONTEXTW, BOOL );
+typedef BOOL ( WTAPI * WTGETA ) ( HCTX, LPLOGCONTEXTA );
+typedef BOOL ( WTAPI * WTSETA ) ( HCTX, LPLOGCONTEXTA );
+typedef BOOL ( WTAPI * WTGETW ) ( HCTX, LPLOGCONTEXTW );
+typedef BOOL ( WTAPI * WTSETW ) ( HCTX, LPLOGCONTEXTW );
+typedef BOOL ( WTAPI * WTCLOSE ) ( HCTX );
+typedef BOOL ( WTAPI * WTENABLE ) ( HCTX, BOOL );
+typedef BOOL ( WTAPI * WTPACKET ) ( HCTX, UINT, LPVOID );
+typedef BOOL ( WTAPI * WTOVERLAP ) ( HCTX, BOOL );
+typedef BOOL ( WTAPI * WTSAVE ) ( HCTX, LPVOID );
+typedef BOOL ( WTAPI * WTCONFIG ) ( HCTX, HWND );
+typedef HCTX ( WTAPI * WTRESTORE ) ( HWND, LPVOID, BOOL );
+typedef BOOL ( WTAPI * WTEXTSET ) ( HCTX, UINT, LPVOID );
+typedef BOOL ( WTAPI * WTEXTGET ) ( HCTX, UINT, LPVOID );
+typedef int ( WTAPI * WTPACKETSPEEK ) ( HCTX, int, LPVOID );
+typedef int ( WTAPI * WTQUEUESIZEGET ) ( HCTX );
+typedef BOOL ( WTAPI * WTQUEUESIZESET ) ( HCTX, int );
+typedef int  ( WTAPI * WTDATAGET ) ( HCTX, UINT, UINT, int, LPVOID, LPINT);
+typedef int  ( WTAPI * WTDATAPEEK ) ( HCTX, UINT, UINT, int, LPVOID, LPINT);
+typedef int  ( WTAPI * WTPACKETSGET ) (HCTX, int, LPVOID);
+typedef HMGR ( WTAPI * WTMGROPEN ) ( HWND, UINT );
+typedef BOOL ( WTAPI * WTMGRCLOSE ) ( HMGR );
+typedef HCTX ( WTAPI * WTMGRDEFCONTEXT ) ( HMGR, BOOL );
+typedef HCTX ( WTAPI * WTMGRDEFCONTEXTEX ) ( HMGR, UINT, BOOL );
+
+static HINSTANCE        hOrigWintab         = NULL;
+static WTINFOA          origWTInfoA         = NULL;
+static WTINFOW          origWTInfoW         = NULL;
+static WTOPENA          origWTOpenA         = NULL;
+static WTOPENW          origWTOpenW         = NULL;
+static WTGETA           origWTGetA          = NULL;
+static WTSETA           origWTSetA          = NULL;
+static WTGETW           origWTGetW          = NULL;
+static WTSETW           origWTSetW          = NULL;
+static WTCLOSE          origWTClose         = NULL;
+static WTPACKET         origWTPacket        = NULL;
+static WTENABLE         origWTEnable        = NULL;
+static WTOVERLAP        origWTOverlap       = NULL;
+static WTSAVE           origWTSave          = NULL;
+static WTCONFIG         origWTConfig        = NULL;
+static WTRESTORE        origWTRestore       = NULL;
+static WTEXTSET         origWTExtSet        = NULL;
+static WTEXTGET         origWTExtGet        = NULL;
+static WTPACKETSPEEK    origWTPacketsPeek   = NULL;
+static WTQUEUESIZEGET   origWTQueueSizeGet  = NULL;
+static WTQUEUESIZESET   origWTQueueSizeSet  = NULL;
+static WTDATAGET        origWTDataGet       = NULL;
+static WTDATAPEEK       origWTDataPeek      = NULL;
+static WTPACKETSGET     origWTPacketsGet    = NULL;
+static WTMGROPEN        origWTMgrOpen       = NULL;
+static WTMGRCLOSE       origWTMgrClose      = NULL;
+static WTMGRDEFCONTEXT  origWTMgrDefContext = NULL;
+static WTMGRDEFCONTEXTEX origWTMgrDefContextEx = NULL;
+
+#define GETPROCADDRESS(type, func) \
+	orig##func = (type)GetProcAddress(hOrigWintab, #func);
+
+static BOOL LoadWintab(char *path)
+{
+	hOrigWintab = LoadLibraryA(path);
+
+	if (!hOrigWintab) {
+		return FALSE;
+	}
+
+	GETPROCADDRESS(WTOPENA, WTOpenA);
+	GETPROCADDRESS(WTINFOA, WTInfoA);
+	GETPROCADDRESS(WTGETA, WTGetA);
+	GETPROCADDRESS(WTSETA, WTSetA);
+	GETPROCADDRESS(WTOPENW, WTOpenW);
+	GETPROCADDRESS(WTINFOW, WTInfoW);
+	GETPROCADDRESS(WTGETW, WTGetW);
+	GETPROCADDRESS(WTSETW, WTSetW);
+	GETPROCADDRESS(WTPACKET, WTPacket);
+	GETPROCADDRESS(WTCLOSE, WTClose);
+	GETPROCADDRESS(WTENABLE, WTEnable);
+	GETPROCADDRESS(WTOVERLAP, WTOverlap);
+	GETPROCADDRESS(WTSAVE, WTSave);
+	GETPROCADDRESS(WTCONFIG, WTConfig);
+	GETPROCADDRESS(WTRESTORE, WTRestore);
+	GETPROCADDRESS(WTEXTSET, WTExtSet);
+	GETPROCADDRESS(WTEXTGET, WTExtGet);
+	GETPROCADDRESS(WTPACKETSPEEK, WTPacketsPeek);
+	GETPROCADDRESS(WTQUEUESIZEGET, WTQueueSizeGet);
+	GETPROCADDRESS(WTQUEUESIZESET, WTQueueSizeSet);
+	GETPROCADDRESS(WTDATAGET, WTDataGet);
+	GETPROCADDRESS(WTDATAPEEK, WTDataPeek);
+	GETPROCADDRESS(WTPACKETSGET, WTPacketsGet);
+	GETPROCADDRESS(WTMGROPEN, WTMgrOpen);
+	GETPROCADDRESS(WTMGRCLOSE, WTMgrClose);
+	GETPROCADDRESS(WTMGRDEFCONTEXT, WTMgrDefContext);
+	GETPROCADDRESS(WTMGRDEFCONTEXTEX, WTMgrDefContextEx);
+
+	return TRUE;
+}
+
+static void UnloadWintab(void)
+{
+    origWTInfoA         = NULL;
+    origWTInfoW         = NULL;
+    origWTOpenA         = NULL;
+    origWTOpenW         = NULL;
+    origWTGetA          = NULL;
+    origWTSetA          = NULL;
+    origWTGetW          = NULL;
+    origWTSetW          = NULL;
+    origWTClose         = NULL;
+    origWTPacket        = NULL;
+    origWTEnable        = NULL;
+    origWTOverlap       = NULL;
+    origWTSave          = NULL;
+    origWTConfig        = NULL;
+    origWTRestore       = NULL;
+    origWTExtSet        = NULL;
+    origWTExtGet        = NULL;
+    origWTPacketsPeek   = NULL;
+    origWTQueueSizeGet  = NULL;
+    origWTQueueSizeSet  = NULL;
+    origWTDataGet       = NULL;
+    origWTDataPeek      = NULL;
+    origWTPacketsGet    = NULL;
+    origWTMgrOpen       = NULL;
+    origWTMgrClose      = NULL;
+    origWTMgrDefContext = NULL;
+    origWTMgrDefContextEx = NULL;
+    
+    if (hOrigWintab) {
+        FreeLibrary(hOrigWintab);
+        hOrigWintab = NULL;
+    }
+}
+
+static BOOL OpenLogFile(void)
+{
+	fopen_s (&fhLog, "wintab.txt", "a");
+	return (fhLog != NULL ? TRUE : FALSE);
+}
+
+static void FlushLog(void)
+{
+    if (fhLog) {
+        fflush(fhLog);
+    }
+}
+
+static void LogEntry(char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    vfprintf(fhLog, fmt, ap);
+    va_end(ap);
+}
+
+static void LogLogContextA(LPLOGCONTEXTA lpCtx)
+{
+    if (!fhLog)
+        return;
+
+    if (!lpCtx) {
+        fprintf(fhLog, "lpCtx(A) = NULL\n");
+    } else {
+        fprintf(fhLog, "lpCtx(A) = %p\n"
+            " lpOptions = %x\n"
+            " lcStatus = %x\n"
+            " lcLocks = %d\n"
+            " lcMsgBase = %x\n"
+            " lcDevice = %x\n"
+            " lcPktRate = %x\n"
+            " lcPktData = %x\n"
+            " lcPktMode = %x\n"
+            " lcMoveMask = %x\n"
+            " lcBtnDnMask = %x\n"
+            " lcBtnUpMask = %x\n"
+            " lcInOrgX = %ld\n"
+            " lcInOrgY = %ld\n"
+            " lcInOrgZ = %ld\n"
+            " lcInExtX = %ld\n"
+            " lcInExtY = %ld\n"
+            " lcInExtZ = %ld\n"
+            " lcOutOrgX = %ld\n"
+            " lcOutOrgY = %ld\n"
+            " lcOutOrgZ = %ld\n"
+            " lcOutExtX = %ld\n"
+            " lcOutExtY = %ld\n"
+            " lcOutExtZ = %ld\n"
+            " lcOutExtX = %ld\n"
+            " lcOutExtY = %ld\n"
+            " lcOutExtZ = %ld\n"
+            " lcSensX = %d.%d\n"
+            " lcSensY = %d.%d\n"
+            " lcSensZ = %d.%d\n"
+            " lcSysMode = %d\n"
+            " lcSysOrgX = %d\n"
+            " lcSysOrgY = %d\n"
+            " lcSysExtX = %d\n"
+            " lcSysExtY = %d\n"
+            " lcSysSensX = %d.%d\n"
+            " lcSysSensX = %d.%d\n",
+            lpCtx,
+            lpCtx->lcOptions,
+            lpCtx->lcStatus,
+            lpCtx->lcLocks,
+            lpCtx->lcMsgBase,
+            lpCtx->lcDevice,
+            lpCtx->lcPktRate,
+            lpCtx->lcPktData,
+            lpCtx->lcPktMode,
+            lpCtx->lcMoveMask,
+            lpCtx->lcBtnDnMask,
+            lpCtx->lcBtnUpMask,
+            lpCtx->lcInOrgX,
+            lpCtx->lcInOrgY,
+            lpCtx->lcInOrgZ,
+            lpCtx->lcInExtX,
+            lpCtx->lcInExtY,
+            lpCtx->lcInExtZ,
+            lpCtx->lcOutOrgX,
+            lpCtx->lcOutOrgY,
+            lpCtx->lcOutOrgZ,
+            lpCtx->lcOutExtX,
+            lpCtx->lcOutExtY,
+            lpCtx->lcOutExtZ,
+            INT(lpCtx->lcSensX), FRAC(lpCtx->lcSensX),
+            INT(lpCtx->lcSensY), FRAC(lpCtx->lcSensY),
+            INT(lpCtx->lcSensZ), FRAC(lpCtx->lcSensZ),
+            lpCtx->lcSysMode,
+            lpCtx->lcSysOrgX,
+            lpCtx->lcSysOrgY,
+            lpCtx->lcSysExtX,
+            lpCtx->lcSysExtY,
+            INT(lpCtx->lcSysSensX), FRAC(lpCtx->lcSysSensX),
+            INT(lpCtx->lcSysSensY), FRAC(lpCtx->lcSysSensY)
+        );
+    }
+}
+
+static void LogLogContextW(LPLOGCONTEXTW lpCtx)
+{
+    if (!fhLog)
+        return;
+
+    if (!lpCtx) {
+        fprintf(fhLog, "lpCtx(W) = NULL\n");
+    } else {
+        fprintf(fhLog, "lpCtx(W) = %p\n"
+            " lpOptions = %x\n"
+            " lcStatus = %x\n"
+            " lcLocks = %d\n"
+            " lcMsgBase = %x\n"
+            " lcDevice = %x\n"
+            " lcPktRate = %x\n"
+            " lcPktData = %x\n"
+            " lcPktMode = %x\n"
+            " lcMoveMask = %x\n"
+            " lcBtnDnMask = %x\n"
+            " lcBtnUpMask = %x\n"
+            " lcInOrgX = %ld\n"
+            " lcInOrgY = %ld\n"
+            " lcInOrgZ = %ld\n"
+            " lcInExtX = %ld\n"
+            " lcInExtY = %ld\n"
+            " lcInExtZ = %ld\n"
+            " lcOutOrgX = %ld\n"
+            " lcOutOrgY = %ld\n"
+            " lcOutOrgZ = %ld\n"
+            " lcOutExtX = %ld\n"
+            " lcOutExtY = %ld\n"
+            " lcOutExtZ = %ld\n"
+            " lcOutExtX = %ld\n"
+            " lcOutExtY = %ld\n"
+            " lcOutExtZ = %ld\n"
+            " lcSensX = %d.%d\n"
+            " lcSensY = %d.%d\n"
+            " lcSensZ = %d.%d\n"
+            " lcSysMode = %d\n"
+            " lcSysOrgX = %d\n"
+            " lcSysOrgY = %d\n"
+            " lcSysExtX = %d\n"
+            " lcSysExtY = %d\n"
+            " lcSysSensX = %d.%d\n"
+            " lcSysSensX = %d.%d\n",
+            lpCtx,
+            lpCtx->lcOptions,
+            lpCtx->lcStatus,
+            lpCtx->lcLocks,
+            lpCtx->lcMsgBase,
+            lpCtx->lcDevice,
+            lpCtx->lcPktRate,
+            lpCtx->lcPktData,
+            lpCtx->lcPktMode,
+            lpCtx->lcMoveMask,
+            lpCtx->lcBtnDnMask,
+            lpCtx->lcBtnUpMask,
+            lpCtx->lcInOrgX,
+            lpCtx->lcInOrgY,
+            lpCtx->lcInOrgZ,
+            lpCtx->lcInExtX,
+            lpCtx->lcInExtY,
+            lpCtx->lcInExtZ,
+            lpCtx->lcOutOrgX,
+            lpCtx->lcOutOrgY,
+            lpCtx->lcOutOrgZ,
+            lpCtx->lcOutExtX,
+            lpCtx->lcOutExtY,
+            lpCtx->lcOutExtZ,
+            INT(lpCtx->lcSensX), FRAC(lpCtx->lcSensX),
+            INT(lpCtx->lcSensY), FRAC(lpCtx->lcSensY),
+            INT(lpCtx->lcSensZ), FRAC(lpCtx->lcSensZ),
+            lpCtx->lcSysMode,
+            lpCtx->lcSysOrgX,
+            lpCtx->lcSysOrgY,
+            lpCtx->lcSysExtX,
+            lpCtx->lcSysExtY,
+            INT(lpCtx->lcSysSensX), FRAC(lpCtx->lcSysSensX),
+            INT(lpCtx->lcSysSensY), FRAC(lpCtx->lcSysSensY)
+        );
+    }
+}
+
+static UINT PacketBytes(UINT data, UINT mode)
+{
+	UINT n = 0;
+
+	if (data & PK_CONTEXT)
+		n += sizeof(HCTX);
+	if (data & PK_STATUS)
+		n += sizeof(UINT);
+	if (data & PK_TIME)
+		n += sizeof(DWORD);
+	if (data & PK_CHANGED)
+		n += sizeof(WTPKT);
+	if (data & PK_SERIAL_NUMBER)
+		n += sizeof(UINT);
+	if (data & PK_CURSOR)
+		n += sizeof(UINT);
+	if (data & PK_BUTTONS)
+		n += sizeof(UINT);
+	if (data & PK_X)
+		n += sizeof(LONG);
+	if (data & PK_Y)
+		n += sizeof(LONG);
+	if (data & PK_Z)
+		n += sizeof(LONG);
+	if (data & PK_NORMAL_PRESSURE) {
+		if (mode & PK_NORMAL_PRESSURE)
+			n += sizeof(int);
+		else
+			n += sizeof(UINT);
+	}
+	if (data & PK_TANGENT_PRESSURE) {
+		if (mode & PK_TANGENT_PRESSURE)
+			n += sizeof(int);
+		else
+			n += sizeof(UINT);
+	}
+	if (data & PK_ORIENTATION)
+		n += sizeof(ORIENTATION);
+	if (data & PK_ROTATION)
+		n += sizeof(ROTATION);
+
+	return n;
+}
+
+static void LogPacket(UINT data, UINT mode, LPVOID lpData)
+{
+    BYTE *bData = (BYTE *)lpData;
+
+    if (!fhLog)
+        return;
+
+    fprintf(fhLog, "packet = %p (data=%d, mode=%x)\n", lpData, data, mode);
+
+	if (data & PK_CONTEXT) {
+		fprintf(fhLog, " PK_CONTEXT = %p\n", *((HCTX *)bData));
+        bData += sizeof(HCTX);
+    }
+	if (data & PK_STATUS) {
+		fprintf(fhLog, " PK_STATUS = %x\n", *((UINT *)bData));
+        bData += sizeof(UINT);
+    }
+	if (data & PK_TIME) {
+		fprintf(fhLog, " PK_TIME = %d\n", *((DWORD *)bData));
+        bData += sizeof(DWORD);
+    }
+	if (data & PK_CHANGED) {
+		fprintf(fhLog, " PK_CHANGED = %x\n", *((WTPKT *)bData));
+        bData += sizeof(WTPKT);
+    }
+	if (data & PK_SERIAL_NUMBER) {
+		fprintf(fhLog, " PK_SERIAL_NUMBER = %u\n", *((UINT *)bData));
+        bData += sizeof(UINT);
+    }
+	if (data & PK_CURSOR) {
+		fprintf(fhLog, " PK_CURSOR = %u\n", *((UINT *)bData));
+        bData += sizeof(UINT);
+    }
+	if (data & PK_BUTTONS) {
+		fprintf(fhLog, " PK_BUTTONS = %x\n", *((UINT *)bData));
+        bData += sizeof(UINT);
+    }
+	if (data & PK_X) {
+		fprintf(fhLog, " PK_X = %ld\n", *((LONG *)bData));
+        bData += sizeof(LONG);
+    }
+	if (data & PK_Y) {
+		fprintf(fhLog, " PK_Y = %d\n", *((LONG *)bData));
+        bData += sizeof(LONG);
+    }
+	if (data & PK_Z) {
+		fprintf(fhLog, " PK_Z = %d\n", *((LONG *)bData));
+        bData += sizeof(LONG);
+    }
+	if (data & PK_NORMAL_PRESSURE) {
+		if (mode & PK_NORMAL_PRESSURE) {
+		    fprintf(fhLog, " PK_NORMAL_PRESSURE = %d\n", *((int *)bData));
+            bData += sizeof(int);
+		} else {
+		    fprintf(fhLog, " PK_NORMAL_PRESSURE = %d\n", *((UINT *)bData));
+            bData += sizeof(UINT);
+        }
+	}
+	if (data & PK_TANGENT_PRESSURE) {
+		if (mode & PK_TANGENT_PRESSURE) {
+		    fprintf(fhLog, " PK_TANGENT_PRESSURE = %d\n", *((int *)bData));
+            bData += sizeof(int);
+		} else {
+		    fprintf(fhLog, " PK_TANGENT_PRESSURE = %d\n", *((UINT *)bData));
+            bData += sizeof(UINT);
+        }
+	}
+	if (data & PK_ORIENTATION) {
+		ORIENTATION *o = (ORIENTATION *)bData;
+		fprintf(fhLog, " PK_ORIENTATION = %d %d %d\n", o->orAzimuth, o->orAltitude, o->orTwist);
+        bData += sizeof(ORIENTATION);
+    }
+	if (data & PK_ROTATION) {
+		ROTATION *r = (ROTATION *)bData;
+		fprintf(fhLog, " PK_ROTATION = %d %d %d\n", r->roPitch, r->roRoll, r->roYaw);
+        bData += sizeof(ROTATION);
+    }
+}
+
+static void LogBytes(LPVOID lpData, UINT nBytes)
+{
+	BYTE *dataPtr = (BYTE *)lpData;
+
+	if (!fhLog)
+		return;
+
+	fprintf(fhLog, "data =");
+	if (dataPtr) {
+		UINT n;
+		for (n = 0; n < nBytes; ++n) {
+			fprintf(fhLog, " %02x", dataPtr[n]);
+		}
+	} else {
+		fprintf(fhLog, " NULL");
+	}
+	fprintf(fhLog, "\n");
+}
+
+static void Init()
+{
+    if (initialised)
+        return;
+
+    if (logging) {
+		logging = OpenLogFile();
+    }
+
+    LogEntry(
+        "init, logging = %d, debug = %d, useEmulation = %d\n", 
+        logging, debug, useEmulation
+    );
+
+    if (useEmulation) {
+        emuInit(logging, debug);
+    } else {
+        if (LoadWintab("C:\\Windows\\System32\\wintab32.dll")) {
+        } else if (LoadWintab("C:\\Windows\\wintab32.dll")) {
+        }
+    }
+
+    initialised = TRUE;
+}
+
+UINT API WTInfoA(UINT wCategory, UINT nIndex, LPVOID lpOutput)
+{
+	UINT ret = 0;
+    
+    Init();
+
+    if (useEmulation) {
+        ret = emuWTInfoA(wCategory, nIndex, lpOutput);
+    } else if (hOrigWintab) {
+        ret = origWTInfoA(wCategory, nIndex, lpOutput);
+    }
+    
+    if (logging) {
+	    LogEntry("WTInfoA(%x, %x, %p) = %d\n", wCategory, nIndex, lpOutput, ret);
+	    LogBytes(lpOutput, ret);
+    }
+
+	return ret; 
+}
+
+UINT API WTInfoW(UINT wCategory, UINT nIndex, LPVOID lpOutput)
+{
+	UINT ret = 0;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTInfoW(wCategory, nIndex, lpOutput);
+    } else if (hOrigWintab) {
+        ret = origWTInfoW(wCategory, nIndex, lpOutput);
+    }
+    if (logging) {
+        LogEntry("WTInfoW(%x, %x, %p) = %d\n", wCategory, nIndex, lpOutput, ret);
+	    LogBytes(lpOutput, ret);
+    }
+
+	return ret;
+}
+
+HCTX API WTOpenA(HWND hWnd, LPLOGCONTEXTA lpLogCtx, BOOL fEnable)
+{
+	HCTX ret = NULL;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTOpenA(hWnd, lpLogCtx, fEnable);
+    } else if (hOrigWintab) {
+        ret = origWTOpenA(hWnd, lpLogCtx, fEnable);
+    }
+        
+    if (lpLogCtx) {
+        // snoop packet mode
+        packetData = lpLogCtx->lcPktData;
+        packetMode = lpLogCtx->lcPktMode;
+    }
+
+	if (logging) {
+	    LogEntry("WTOpenA(%x, %p, %d) = %x\n", hWnd, lpLogCtx, fEnable, ret);
+	    LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+		LogLogContextA(lpLogCtx);
+	}
+
+	return ret;
+}
+
+HCTX API WTOpenW(HWND hWnd, LPLOGCONTEXTW lpLogCtx, BOOL fEnable)
+{
+	HCTX ret = NULL;
+    
+    Init();
+
+    if (useEmulation) {
+	    ret = emuWTOpenW(hWnd, lpLogCtx, fEnable);
+    } else if (hOrigWintab) {
+	    ret = origWTOpenW(hWnd, lpLogCtx, fEnable);
+    }
+    
+    if (lpLogCtx) {
+        // snoop packet mode
+        packetData = lpLogCtx->lcPktData;
+        packetMode = lpLogCtx->lcPktMode;
+    }
+    
+    if (logging) {
+	    LogEntry("WTOpenW(%x, %p, %d) = %x\n", hWnd, lpLogCtx, fEnable, ret);
+	    LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+		LogLogContextW(lpLogCtx);
+    }
+
+	return ret;
+}
+
+BOOL API WTClose(HCTX hCtx)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+
+    if (useEmulation) {
+        ret = emuWTClose(hCtx);
+    } else if (hOrigWintab) {
+        ret = origWTClose(hCtx);
+    }
+
+    if (logging) {
+	    LogEntry("WTClose(%x) = %d\n", hCtx, ret);
+    }
+
+	return ret;
+}
+
+int API WTPacketsGet(HCTX hCtx, int cMaxPkts, LPVOID lpPkt)
+{
+	int ret = 0;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTPacketsGet(hCtx, cMaxPkts, lpPkt);
+    } else if (hOrigWintab) {
+        ret = origWTPacketsGet(hCtx, cMaxPkts, lpPkt);
+    }
+
+    if (logging) {
+	    LogEntry("WTPacketGet(%x, %d, %p) = %d\n", hCtx, cMaxPkts, lpPkt, ret);
+	    if (ret > 0)
+		    LogBytes(lpPkt, PacketBytes(packetData, packetMode) * ret);
+    }
+	
+    return ret;
+}
+
+
+BOOL API WTPacket(HCTX hCtx, UINT wSerial, LPVOID lpPkt)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTPacket(hCtx, wSerial, lpPkt);
+    } else if (hOrigWintab) {
+        ret = origWTPacket(hCtx, wSerial, lpPkt);
+    }
+
+    if (logging) {
+        LogEntry("WTPacket(%x, %x, %p) = %d\n", hCtx, wSerial, lpPkt, ret);
+        if (ret) {
+            LogBytes(lpPkt, PacketBytes(packetData, packetMode));
+        }
+    }
+
+	return ret;
+}
+
+
+BOOL API WTEnable(HCTX hCtx, BOOL fEnable)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+	    ret = emuWTEnable(hCtx, fEnable);
+    } else if (hOrigWintab) {
+	    ret = origWTEnable(hCtx, fEnable);
+    }
+
+    if (logging) {
+	    LogEntry("WTEnable(%x, %d) = %d\n", hCtx, fEnable, ret);
+    }
+
+    return ret;
+}
+
+BOOL API WTOverlap(HCTX hCtx, BOOL fToTop)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTOverlap(hCtx, fToTop);
+    } else if (hOrigWintab) {
+        ret = origWTOverlap(hCtx, fToTop);
+    }
+    
+    if (logging) {
+	    LogEntry("WTOverlap(%x, %d) = %d\n", hCtx, fToTop, ret);
+    }
+
+	return ret;
+}
+
+BOOL API WTConfig(HCTX hCtx, HWND hWnd)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTConfig(hCtx, hWnd);
+    } else if (hOrigWintab) {
+        ret = origWTConfig(hCtx, hWnd);
+    }
+
+    if (logging) {
+	    LogEntry("WTConfig(%x, %x) = %d\n", hCtx, hWnd, ret);
+    }
+
+	return ret;
+}
+
+
+BOOL API WTGetA(HCTX hCtx, LPLOGCONTEXTA lpLogCtx)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTGetA(hCtx, lpLogCtx);
+    } else if (hOrigWintab) {
+        ret = origWTGetA(hCtx, lpLogCtx);
+	}
+    
+    if (lpLogCtx && ret) {
+        // snoop packet mode
+        packetData = lpLogCtx->lcPktData;
+        packetMode = lpLogCtx->lcPktMode;
+    }
+
+    if (logging) {
+        LogEntry("WTGetA(%x, %p) = %d\n", hCtx, lpLogCtx, ret);
+        LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+        LogLogContextA(lpLogCtx);
+    }
+
+	return ret;
+}
+
+BOOL API WTGetW(HCTX hCtx, LPLOGCONTEXTW lpLogCtx)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTGetW(hCtx, lpLogCtx);
+    } else if (hOrigWintab) {
+        ret = origWTGetW(hCtx, lpLogCtx);
+    }
+    
+    if (lpLogCtx && ret) {
+        // snoop packet mode
+        packetData = lpLogCtx->lcPktData;
+        packetMode = lpLogCtx->lcPktMode;
+    }
+
+    if (logging) {
+	    LogEntry("WTGetW(%x, %p) = %d\n", hCtx, lpLogCtx, ret);
+	    LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+		LogLogContextW(lpLogCtx);
+    }
+
+	return ret;
+}
+
+
+BOOL API WTSetA(HCTX hCtx, LPLOGCONTEXTA lpLogCtx)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTSetA(hCtx, lpLogCtx);
+    } else if (hOrigWintab) {
+        ret = origWTSetA(hCtx, lpLogCtx);
+    }
+    
+    if (lpLogCtx && ret) {
+        // snoop packet mode
+        packetData = lpLogCtx->lcPktData;
+        packetMode = lpLogCtx->lcPktMode;
+    }
+	
+    if (logging) {
+        LogEntry("WTSetA(%x, %p) = %d\n", hCtx, lpLogCtx, ret);
+	    LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+		LogLogContextA(lpLogCtx);
+    }
+
+	return ret;
+}
+
+BOOL API WTSetW(HCTX hCtx, LPLOGCONTEXTW lpLogCtx)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTSetW(hCtx, lpLogCtx);
+    } else if (hOrigWintab) {
+        ret = origWTSetW(hCtx, lpLogCtx);
+    }
+    
+    if (lpLogCtx && ret) {
+        // snoop packet mode
+        packetData = lpLogCtx->lcPktData;
+        packetMode = lpLogCtx->lcPktMode;
+    }
+	
+    if (logging) {
+        LogEntry("WTSetW(%x, %p) = %d\n", hCtx, lpLogCtx, ret);
+	    LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+		LogLogContextW(lpLogCtx);
+    }
+	
+    return ret;
+}
+
+BOOL API WTExtGet(HCTX hCtx, UINT wExt, LPVOID lpData)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTExtGet(hCtx, wExt, lpData);
+    } else if (hOrigWintab) {
+        ret = origWTExtGet(hCtx, wExt, lpData);
+    }
+
+    if (logging) {
+        LogEntry("WTExtGet(%x, %x, %p) = %d\n", hCtx, wExt, lpData, ret);
+        //LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+    }
+
+	return ret;
+}
+
+BOOL API WTExtSet(HCTX hCtx, UINT wExt, LPVOID lpData)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTExtSet(hCtx, wExt, lpData);
+    } else if (hOrigWintab) {
+        ret = origWTExtSet(hCtx, wExt, lpData);
+    }
+
+    if (logging) {
+	    LogEntry("WTExtSet(%x, %x, %p) = %d\n", hCtx, wExt, lpData, ret);
+	    //LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+    }
+
+	return ret;
+}
+
+BOOL API WTSave(HCTX hCtx, LPVOID lpData)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTSave(hCtx, lpData);
+    } else if (hOrigWintab) {
+        ret = origWTSave(hCtx, lpData);
+    }
+
+    if (logging) {
+	    LogEntry("WTSave(%x, %p) = %d\n", hCtx, lpData, ret);
+	    //LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+    }
+
+	return ret;
+}
+
+HCTX API WTRestore(HWND hWnd, LPVOID lpSaveInfo, BOOL fEnable)
+{
+	HCTX ret = NULL;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTRestore(hWnd, lpSaveInfo, fEnable);
+    } else if (hOrigWintab) {
+        ret = origWTRestore(hWnd, lpSaveInfo, fEnable);
+    }
+
+    if (logging) {
+	    LogEntry("WTRestore(%x, %p, %d) = %x\n", hWnd, lpSaveInfo, fEnable, ret);
+	    //LogBytes(lpLogCtx, sizeof(*lpLogCtx));
+    }
+
+	return ret;
+}
+
+int API WTPacketsPeek(HCTX hWnd, int cMaxPkt, LPVOID lpPkts)
+{
+	int ret = 0;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTPacketsPeek(hWnd, cMaxPkt, lpPkts);
+    } else if (hOrigWintab) {
+        ret = origWTPacketsPeek(hWnd, cMaxPkt, lpPkts);
+    }
+
+    if (logging) {
+        LogEntry("WTPacketsPeek(%x, %d, %p) = %d\n", hWnd, cMaxPkt, lpPkts, ret);
+        if (ret > 0)
+            LogBytes(lpPkts, PacketBytes(packetData, packetMode) * ret);
+    }
+
+	return ret;
+}
+
+int API WTDataGet(HCTX hCtx, UINT wBegin, UINT wEnd, int cMaxPkts, LPVOID lpPkts, LPINT lpNPkts)
+{
+	int ret = 0;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTDataGet(hCtx, wBegin, wEnd, cMaxPkts, lpPkts, lpNPkts);
+    } else if (hOrigWintab) {
+        ret = origWTDataGet(hCtx, wBegin, wEnd, cMaxPkts, lpPkts, lpNPkts);
+    }
+    
+    if (logging) {
+        LogEntry("WTDataGet(%x, %x, %x, %d, %p, %p) = %d\n", hCtx, wBegin, wEnd, cMaxPkts, lpPkts, lpNPkts, ret);
+        if (lpNPkts)
+            LogBytes(lpPkts, PacketBytes(packetData, packetMode) * (*lpNPkts));
+    }
+
+	return ret;
+}
+
+int API WTDataPeek(HCTX hCtx, UINT wBegin, UINT wEnd, int cMaxPkts, LPVOID lpPkts, LPINT lpNPkts)
+{
+	int ret = 0;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTDataPeek(hCtx, wBegin, wEnd, cMaxPkts, lpPkts, lpNPkts);
+    } else if (hOrigWintab) {
+        ret = origWTDataPeek(hCtx, wBegin, wEnd, cMaxPkts, lpPkts, lpNPkts);
+    }
+
+    if (logging) {
+        LogEntry("WTDataPeek(%x, %x, %x, %d, %p, %p) = %d\n", hCtx, wBegin, wEnd, cMaxPkts, lpPkts, lpNPkts, ret);
+        if (lpNPkts)
+            LogBytes(lpPkts, PacketBytes(packetData, packetMode) * (*lpNPkts));
+    }
+
+	return ret;
+}
+
+int API WTQueueSizeGet(HCTX hCtx)
+{
+	int ret = 0;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTQueueSizeGet(hCtx);
+    } else if (hOrigWintab) {
+        ret = origWTQueueSizeGet(hCtx);
+    }
+
+    if (logging) {
+	    LogEntry("WTQueueSizeGet(%x) = %d\n", hCtx, ret);
+    }
+
+	return ret;
+}
+
+BOOL API WTQueueSizeSet(HCTX hCtx, int nPkts)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTQueueSizeSet(hCtx, nPkts);
+    } else if (hOrigWintab) {
+        ret = origWTQueueSizeSet(hCtx, nPkts);
+    }
+    
+    if (logging) {
+	    LogEntry("WTQueueSizeSet(%x, %d) = %d\n", hCtx, nPkts, ret);
+    }
+
+	return ret;
+}
+
+HMGR API WTMgrOpen(HWND hWnd, UINT wMsgBase)
+{
+	HMGR ret = NULL;
+    
+    Init();
+    
+    if (useEmulation) {
+        ret = emuWTMgrOpen(hWnd, wMsgBase);
+    } else if (hOrigWintab) {
+        ret = origWTMgrOpen(hWnd, wMsgBase);
+    }
+	
+    if (logging) {
+        LogEntry("WTMgrOpen(%x, %x) = %x\n", hWnd, wMsgBase, ret);
+	}
+
+    return ret;
+}
+
+BOOL API WTMgrClose(HMGR hMgr)
+{
+	BOOL ret = FALSE;
+    
+    Init();
+    
+    if (useEmulation) {
+	    ret = emuWTMgrClose(hMgr);
+    } else if (hOrigWintab) {
+	    ret = origWTMgrClose(hMgr);
+    }
+	
+    if (logging) {
+        LogEntry("WTMgrClose(%x) = %d\n", hMgr, ret);
+    }
+
+	return ret;
+}
+
+BOOL API WTMgrContextEnum(HMGR hMgr, WTENUMPROC lpEnumFunc, LPARAM lParam)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+        LogEntry("Unsupported WTMgrContextEnum(%x, %p, %x)\n", hMgr, lpEnumFunc, lParam);
+	return FALSE;
+}
+
+HWND API WTMgrContextOwner(HMGR hMgr, HCTX hCtx)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrContextOwner(%x, %x)\n", hMgr, hCtx);
+	return NULL;
+}
+
+HCTX API WTMgrDefContext(HMGR hMgr, BOOL fSystem)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrDefContext(%x, %d)\n", hMgr, fSystem);
+	return NULL;
+}
+
+HCTX API WTMgrDefContextEx(HMGR hMgr, UINT wDevice, BOOL fSystem)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrDefContextEx(%x, %x, %d)\n", hMgr, wDevice, fSystem);
+	return NULL;
+}
+
+UINT API WTMgrDeviceConfig(HMGR hMgr, UINT wDevice, HWND hWnd)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrDeviceConfig(%x, %x, %x)\n", hMgr, wDevice, hWnd);
+	return 0;
+}
+
+BOOL API WTMgrExt(HMGR hMgr, UINT wParam1, LPVOID lpParam1)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrExt(%x, %p, %x)\n", hMgr, wParam1, lpParam1);
+	return FALSE;
+}
+
+BOOL API WTMgrCsrEnable(HMGR hMgr, UINT wParam1, BOOL fParam1)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrCsrEnable(%x, %x, %d)\n", hMgr, wParam1, fParam1);
+	return FALSE;
+}
+
+BOOL API WTMgrCsrButtonMap(HMGR hMgr, UINT wCursor, LPBYTE lpLogBtns, LPBYTE lpSysBtns)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrCsrButtonMap(%x, %x, %p, %x)\n", hMgr, wCursor, lpLogBtns, lpSysBtns);
+	return FALSE;
+}
+
+BOOL API WTMgrCsrPressureBtnMarks(HMGR hMgr, UINT wCsr, DWORD lpNMarks, DWORD lpTMarks)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrCsrPressureBtnMarks(%x, %x, %x, %x)\n", hMgr, wCsr, lpNMarks, lpTMarks);
+	return FALSE;
+}
+
+BOOL API WTMgrCsrPressureResponse(HMGR hMgr, UINT wCsr, UINT FAR *lpNResp, UINT FAR *lpTResp)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrCsrPressureResponse(%x, %x, %p, %p)\n", hMgr, wCsr, lpNResp, lpTResp);
+	return FALSE;
+}
+
+BOOL API WTMgrCsrExt(HMGR hMgr, UINT wCsr, UINT wParam1, LPVOID lpParam1)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrCsrExt(%x, %x, %x, %p)\n", hMgr, wCsr, wParam1, lpParam1);
+	return FALSE;
+}
+
+BOOL API WTQueuePacketsEx(HCTX hCtx, UINT FAR *lpParam1, UINT FAR *lpParam2)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTQueuePacketsEx(%x, %p, %p)\n", hCtx, lpParam1, lpParam2);
+	return FALSE;
+}
+
+BOOL API WTMgrConfigReplaceExA(HMGR hMgr, BOOL fParam1, LPSTR lpParam1, LPSTR lpParam2)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrConfigReplaceExA(%x, %d, %p, %p)\n", hMgr, fParam1, lpParam1, lpParam2);
+	return FALSE;
+}
+
+BOOL API WTMgrConfigReplaceExW(HMGR hMgr, BOOL fParam1, LPWSTR lpParam1, LPSTR lpParam2)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrConfigReplaceExW(%x, %d, %p, %p)\n", hMgr, fParam1, lpParam1, lpParam2);
+	return FALSE;
+}
+
+HWTHOOK API WTMgrPacketHookExA(HMGR hMgr, int cParam1, LPSTR lpParam1, LPSTR lpParam2)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrPacketHookExA(%x, %d, %p, %p)\n", hMgr, cParam1, lpParam1, lpParam2);
+	return NULL;
+}
+
+HWTHOOK API WTMgrPacketHookExW(HMGR hMgr, int cParam1, LPWSTR lpParam1, LPSTR lpParam2)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrPacketHookExW(%x, %d, %p, %p)\n", hMgr, cParam1, lpParam1, lpParam2);
+	return NULL;
+}
+
+BOOL API WTMgrPacketUnhook(HWTHOOK hWTHook)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrPacketUnhook(%x)\n", hWTHook);
+	return FALSE;
+}
+
+LRESULT API WTMgrPacketHookNext(HWTHOOK hWTHook, int cParam1, WPARAM wParam1, LPARAM lpParam1)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrPacketHookNext(%x, %d, %x, %x)\n", hWTHook, cParam1, wParam1, lpParam1);
+	return NULL;
+}
+
+BOOL API WTMgrCsrPressureBtnMarksEx(HMGR hMgr, UINT wCsr, UINT FAR *lpParam1, UINT FAR *lpParam2)
+{
+    // XXX: unsupported
+    Init();
+    if (logging)
+	    LogEntry("Unsupported WTMgrCsrPressureBtnMarksEx(%x, %x, %p, %p)\n", hMgr, wCsr, lpParam1, lpParam2);
+	return FALSE;
+}
+
