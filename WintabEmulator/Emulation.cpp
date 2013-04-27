@@ -28,11 +28,11 @@ static HWND window = NULL;
 static packet_data_t *queue;
 static UINT q_start, q_end, q_length;
 static LOGCONTEXTA default_context;
-static LOGCONTEXTA context = NULL;
+static LPLOGCONTEXTA context = NULL;
 
 static void init_context(LOGCONTEXTA *ctx)
 {
-    strncpy(ctx->lcName, "Windows", LC_NAMELEN);
+    strncpy_s(ctx->lcName, "Windows", LC_NAMELEN);
     ctx->lcOptions  = 0;
     ctx->lcStatus   = 0;
     ctx->lcLocks    = 0;
@@ -56,9 +56,9 @@ static void init_context(LOGCONTEXTA *ctx)
     ctx->lcOutExtX  = ctx->lcInExtX;
     ctx->lcOutExtY  = ctx->lcInExtY;
     ctx->lcOutExtZ  = ctx->lcInExtZ;
-    ctx->lcSensX    = src->lcSensX;
-    ctx->lcSensY    = src->lcSensY;
-    ctx->lcSensZ    = src->lcSensZ;
+    ctx->lcSensX    = 0; // FIXME
+    ctx->lcSensY    = 0; // FIXME
+    ctx->lcSensZ    = 0; // FIXME
     ctx->lcSysMode  = 0; // FIXME
     ctx->lcSysOrgX  = 0; // FIXME
     ctx->lcSysOrgY  = 0; // FIXME
@@ -68,10 +68,10 @@ static void init_context(LOGCONTEXTA *ctx)
     ctx->lcSysSensY = 0; // FIXME
 }
 
-static UINT convert_contextw(LOGCONTEXTW *dst, LOGCONTEXTA *src)
+static UINT convert_contextw(LPLOGCONTEXTW dst, LPLOGCONTEXTA src)
 {
     if (dst) {
-        _snwprintf(dst->lcName, LC_NAMELEN - 1, "%s", src->lcName);
+        _snwprintf_s(dst->lcName, LC_NAMELEN - 1, L"%s", src->lcName);
         dst->lcName[LC_NAMELEN - 1] = L'\0';
         dst->lcOptions  = src->lcOptions;
         dst->lcStatus   = src->lcStatus;
@@ -110,10 +110,10 @@ static UINT convert_contextw(LOGCONTEXTW *dst, LOGCONTEXTA *src)
     return sizeof(LOGCONTEXTW);
 }
 
-static UINT convert_contexta(LOGCONTEXTA *dst, LOGCONTEXTW *src)
+static UINT convert_contexta(LPLOGCONTEXTA dst, LPLOGCONTEXTW src)
 {
     if (dst) {
-        _snprintf(dst->lcName, LC_NAMELEN - 1, "%S", src->lcName);
+        _snprintf_s(dst->lcName, LC_NAMELEN - 1, "%S", src->lcName);
         dst->lcName[LC_NAMELEN - 1] = '\0';
         dst->lcOptions  = src->lcOptions;
         dst->lcStatus   = src->lcStatus;
@@ -165,7 +165,7 @@ static void allocate_queue(void)
     if (queue) {
         free(queue);
     }
-    queue = malloc(sizeof(packet_data_t) * q_length);
+    queue = (packet_data_t *) malloc(sizeof(packet_data_t) * q_length);
     q_start = 0;
     q_end = 0;
 }
@@ -190,9 +190,17 @@ void emuInit(BOOL fLogging, BOOL fDebug)
 static UINT copy_uint(LPVOID lpOutput, UINT nVal)
 {
     if (lpOutput) {
-        ((UINT *)lpOutput) = nVal;
+        *((UINT *)lpOutput) = nVal;
     }
     return sizeof(UINT);
+}
+
+static UINT copy_dword(LPVOID lpOutput, DWORD nVal)
+{
+    if (lpOutput) {
+        *((DWORD *)lpOutput) = nVal;
+    }
+    return sizeof(DWORD);
 }
 
 static UINT copy_strw(LPVOID lpOutput, CHAR *str)
@@ -200,10 +208,10 @@ static UINT copy_strw(LPVOID lpOutput, CHAR *str)
     int ret = 0;
     if (lpOutput) {
         wchar_t *out = (wchar_t *)lpOutput;
-        _snwprintf(out, MAX_STRING_BYTES, _T("%s"), str);
+        _snwprintf_s(out, MAX_STRING_BYTES, _TRUNCATE, L"%s", str);
         out[MAX_STRING_BYTES - 1] = L'\0'; 
     }
-    return (strlen(ret) * sizeof(wchar_t));
+    return ((strlen(str) + 1) * sizeof(wchar_t));
 }
 
 static UINT copy_stra(LPVOID lpOutput, CHAR *str)
@@ -211,10 +219,22 @@ static UINT copy_stra(LPVOID lpOutput, CHAR *str)
     int ret = 0;
     if (lpOutput) {
         char *out = (char *)lpOutput;
-        _snprintf(out, MAX_STRING_BYTES, "%s", str);
+        _snprintf_s(out, MAX_STRING_BYTES, _TRUNCATE, "%s", str);
         out[MAX_STRING_BYTES - 1] = '\0';
     }
-    return (strlen(ret) * sizeof(char));
+    return ((strlen(str) + 1) * sizeof(char));
+}
+
+static UINT copy_axis(LPVOID lpOutput, LONG axMin, LONG axMax, LONG axUnits, FIX32 axResolution)
+{
+    if (lpOutput) {
+        LPAXIS ax = (LPAXIS)lpOutput;
+        ax->axMin           = axMin;
+        ax->axMax           = axMax;
+        ax->axUnits         = axUnits;
+        ax->axResolution    = axResolution;
+    }
+    return sizeof(AXIS);
 }
 
 static void enableProcessing(void)
@@ -271,8 +291,12 @@ static UINT emuWTInfo(BOOL fUnicode, UINT wCategory, UINT nIndex, LPVOID lpOutpu
                 case STA_PKTDATA:
                 case STA_MANAGERS:
                 case STA_SYSTEM:
-                case STA_BUTTONUSE: // FIXME
+                    break;
+                case STA_BUTTONUSE:
+                    ret = copy_dword(lpOutput, 0x7);
+                    break;
                 case STA_SYSBTNUSE:
+                    ret = copy_dword(lpOutput, 0x7);
                     break;
             }
             break;
@@ -280,9 +304,9 @@ static UINT emuWTInfo(BOOL fUnicode, UINT wCategory, UINT nIndex, LPVOID lpOutpu
         case WTI_DEFSYSCTX:
             if (nIndex == 0) {
                 if (fUnicode) {
-                    ret = convert_contextw((LPLOGCONTEXTW)lpOutput, default_context);
+                    ret = convert_contextw((LPLOGCONTEXTW)lpOutput, &default_context);
                 } else {
-                    ret = copy_contexta((LPLOGCONTEXTA)lpOutput, default_context);
+                    ret = copy_contexta((LPLOGCONTEXTA)lpOutput, &default_context);
                 }
             }
             break;
@@ -290,16 +314,20 @@ static UINT emuWTInfo(BOOL fUnicode, UINT wCategory, UINT nIndex, LPVOID lpOutpu
         case WTI_DSCTXS:
             if (nIndex == 0) {
                 if (fUnicode) {
-                    ret = convert_contextw((LPLOGCONTEXTW)lpOutput, context ? context : default_context);
+                    ret = convert_contextw((LPLOGCONTEXTW)lpOutput, (context ? context : &default_context));
                 } else {
-                    ret = copy_contexta((LPLOGCONTEXTA)lpOutput, context ? context : default_context);
+                    ret = copy_contexta((LPLOGCONTEXTA)lpOutput, (context ? context : &default_context));
                 }
             }
             break;
         case WTI_DEVICES:
             switch (nIndex) {
                 case DVC_NAME:
+                    ret = copy_strw(lpOutput, "Windows");
+                    break;
                 case DVC_HARDWARE:
+                    ret = copy_uint(lpOutput, HWC_INTEGRATED);
+                    break;
                 case DVC_NCSRTYPES:
                 case DVC_FIRSTCSR:
                 case DVC_PKTRATE:
@@ -312,7 +340,9 @@ static UINT emuWTInfo(BOOL fUnicode, UINT wCategory, UINT nIndex, LPVOID lpOutpu
                 case DVC_X:
                 case DVC_Y:
                 case DVC_Z:
-                case DVC_NPRESSURE: // FIXME
+                case DVC_NPRESSURE:
+                    ret = copy_axis(lpOutput, 0, 1023, 0, 0);
+                    break;
                 case DVC_TPRESSURE:
                 case DVC_ORIENTATION:
                 case DVC_ROTATION: /* 1.1 */
@@ -377,7 +407,7 @@ static HCTX emuWTOpen(BOOL unicode, HWND hWnd, LPVOID lpLogCtx, BOOL fEnable)
 
     window = hWnd;
     context = (LPLOGCONTEXTA) malloc(sizeof(LOGCONTEXTA));
-    if (unicode)
+    if (unicode) {
         convert_contexta(context, (LPLOGCONTEXTW) lpLogCtx);
     } else {
         memcpy(context, lpLogCtx, sizeof(LOGCONTEXTA));
@@ -533,7 +563,7 @@ int emuWTDataPeek(HCTX hCtx, UINT wBegin, UINT wEnd, int cMaxPkts, LPVOID lpPkts
 int emuWTQueueSizeGet(HCTX hCtx)
 {
     if (hCtx && ((LPVOID)hCtx == (LPVOID)context)) {
-        return q_len;
+        return q_length;
     } else {
         return 0;
     }
