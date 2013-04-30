@@ -165,20 +165,22 @@ static BOOL OpenLogFile(void)
 	return (fhLog != NULL ? TRUE : FALSE);
 }
 
-static void FlushLog(void)
+void FlushLog(void)
 {
     if (fhLog) {
         fflush(fhLog);
     }
 }
 
-static void LogEntry(char *fmt, ...)
+void LogEntry(char *fmt, ...)
 {
     va_list ap;
 
-    va_start(ap, fmt);
-    vfprintf(fhLog, fmt, ap);
-    va_end(ap);
+    if (fhLog) {
+        va_start(ap, fmt);
+        vfprintf(fhLog, fmt, ap);
+        va_end(ap);
+    }
 }
 
 static void LogLogContextA(LPLOGCONTEXTA lpCtx)

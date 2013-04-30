@@ -11,6 +11,10 @@ of merchantability or fitness for any particular purpose.
 
 #include "wintab.h"
 
+void emuSetModule(HMODULE hModule);
+void emuEnableThread(DWORD dwThread);
+void emuDisableThread(DWORD dwThread);
+
 void emuInit(BOOL fLogging, BOOL fDebug);
 UINT emuWTInfoA(UINT wCategory, UINT nIndex, LPVOID lpOutput);
 UINT emuWTInfoW(UINT wCategory, UINT nIndex, LPVOID lpOutput);
@@ -30,7 +34,7 @@ BOOL emuWTExtGet(HCTX hCtx, UINT wExt, LPVOID lpData);
 BOOL emuWTExtSet(HCTX hCtx, UINT wExt, LPVOID lpData);
 BOOL emuWTSave(HCTX hCtx, LPVOID lpData);
 HCTX emuWTRestore(HWND hWnd, LPVOID lpSaveInfo, BOOL fEnable);
-int emuWTPacketsPeek(HCTX hWnd, int cMaxPkt, LPVOID lpPkts);
+int emuWTPacketsPeek(HCTX hCtx, int cMaxPkt, LPVOID lpPkts);
 int emuWTDataGet(HCTX hCtx, UINT wBegin, UINT wEnd, int cMaxPkts, LPVOID lpPkts, LPINT lpNPkts);
 int emuWTDataPeek(HCTX hCtx, UINT wBegin, UINT wEnd, int cMaxPkts, LPVOID lpPkts, LPINT lpNPkts);
 int emuWTQueueSizeGet(HCTX hCtx);
