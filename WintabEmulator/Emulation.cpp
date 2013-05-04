@@ -69,7 +69,7 @@ static void init_context(LOGCONTEXTA *ctx)
 {
     strncpy_s(ctx->lcName, "Windows", LC_NAMELEN);
     ctx->lcOptions  = 0;
-    ctx->lcStatus   = 0;
+    ctx->lcStatus   = CXO_SYSTEM | CXO_PEN;
     ctx->lcLocks    = 0;
     ctx->lcMsgBase  = 0x7ff0;
     ctx->lcDevice   = 0;
@@ -452,7 +452,7 @@ static UINT write_packet(LPVOID lpPtr, packet_data_t *pkt)
 	if (data & PK_CHANGED)
 		n += copy_wtpkt((LPVOID)(ptr ? ptr + n : NULL), 0xffff); // FIXME
 	if (data & PK_SERIAL_NUMBER)
-		n += copy_uint((LPVOID)(ptr ? ptr + n : NULL), 0x0); // FIXME
+		n += copy_uint((LPVOID)(ptr ? ptr + n : NULL), pkt->serial);
 	if (data & PK_CURSOR)
 		n += copy_uint((LPVOID)(ptr ? ptr + n : NULL), 0x0); // XXX: check
 	if (data & PK_BUTTONS)
@@ -562,14 +562,15 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, LPMS
         ret = GetPointerInfo(pointerId, &(info.pointerInfo));
         info.penFlags   = 0;
         info.penMask    = 0;
-        info.pressure   = 0;
+        info.pressure   = 100;
         info.rotation   = 0;
         info.tiltX      = 0;
         info.tiltY      = 0;
-        buttons[0] = (msg->wParam & MK_LBUTTON) == MK_LBUTTON;
-        buttons[1] = (msg->wParam & MK_RBUTTON) == MK_RBUTTON;
-        buttons[2] = (msg->wParam & MK_MBUTTON) == MK_MBUTTON;
-        contact = (buttons[0] || buttons[1] || buttons[2]);
+        buttons[0] = (info.pointerInfo.pointerFlags & POINTER_FLAG_SECONDBUTTON) == POINTER_FLAG_FIRSTBUTTON;
+        buttons[1] = (info.pointerInfo.pointerFlags & POINTER_FLAG_THIRDBUTTON) == POINTER_FLAG_THIRDBUTTON;
+        contact = 
+            ((info.pointerInfo.pointerFlags & POINTER_FLAG_FIRSTBUTTON)) ||
+            (buttons[0] || buttons[1] || buttons[2]);
     }
     if (!ret) {
         LogEntry("failed to get pointer info for %x\n", pointerId);
@@ -580,11 +581,11 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, LPMS
     pkt.contact = contact;
     pkt.x       = info.pointerInfo.ptPixelLocation.x;
     pkt.y       = context->lcInExtY - info.pointerInfo.ptPixelLocation.y;
-    pkt.pressure= info.pressure;
+    pkt.pressure= contact ? info.pressure : 0;
     pkt.time    = info.pointerInfo.dwTime;
-    pkt.buttons = (buttons[0] ? SBN_LCLICK : 0) 
-                | (buttons[1] ? SBN_RCLICK : 0)
-                | (buttons[2] ? SBN_MCLICK : 0); // FIXME
+    pkt.buttons = (buttons[2] ? SBN_LCLICK : 0) 
+                | (buttons[0] ? SBN_RCLICK : 0)
+                | (buttons[1] ? SBN_MCLICK : 0); // FIXME
 
     // do we need to do the following?
     // SkipPointerFrameMessages(info.pointerInfo.frameId);
@@ -631,13 +632,15 @@ LRESULT CALLBACK emuHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 
         switch (msg->message) {
             case WM_MOUSEMOVE:
-			//case WM_NCMOUSEMOVE:
+			case WM_NCMOUSEMOVE:
 			case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
 			case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
-			//case WM_NCLBUTTONDOWN: case WM_NCLBUTTONUP: case WM_NCLBUTTONDBLCLK:
-			//case WM_NCRBUTTONDOWN: case WM_NCRBUTTONUP: case WM_NCRBUTTONDBLCLK:
+			case WM_NCLBUTTONDOWN: case WM_NCLBUTTONUP: case WM_NCLBUTTONDBLCLK:
+			case WM_NCRBUTTONDOWN: case WM_NCRBUTTONUP: case WM_NCRBUTTONDBLCLK:
+            case WM_NCMOUSELEAVE:
                 ext = GetMessageExtraInfo();
-                LogEntry("%04x wParam:%x lParam:%x ext:%x\n", msg->message, msg->wParam, msg->lParam, ext);
+                LogEntry("%p %04x wParam:%x lParam:%x ext:%x\n", hook, msg->message, msg->wParam, msg->lParam, ext);
+                //LogEntry(" x:%d y:%d\n", GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
                 if (IsPenEvent(ext) && (!(ext & 0x80))) {
                     // this is a pen event so hide it from the application
                     eraseMessage(msg);
@@ -653,13 +656,13 @@ LRESULT CALLBACK emuHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 			case WM_POINTERUP: case WM_POINTERDOWN:
 			case WM_POINTERENTER: case WM_POINTERLEAVE:
 			case WM_POINTERDEVICEINRANGE: case WM_POINTERDEVICEOUTOFRANGE:
-			//case WM_NCPOINTERUPDATE:
-			//case WM_NCPOINTERUP: case WM_NCPOINTERDOWN:
+			case WM_NCPOINTERUPDATE:
+			case WM_NCPOINTERUP: case WM_NCPOINTERDOWN:
                 pointerId = GET_POINTERID_WPARAM(msg->wParam);
                 // only process message if this is a pen
                 if (GetPointerType(pointerId, &pointerType)) {
                     if (pointerType == PT_PEN) {
-                        LogEntry("%04x wParam:%x lParam:%x pointerId:%x pointerType:%x\n", msg->message, msg->wParam, msg->lParam, pointerId, pointerType);
+                        LogEntry("%p %04x wParam:%x lParam:%x pointerId:%x pointerType:%x\n", hook, msg->message, msg->wParam, msg->lParam, pointerId, pointerType);
                         // we are interested in this pointer
                         if (handleMessage(pointerId, pointerType, msg)) {
                             eraseMessage(msg);
@@ -671,6 +674,10 @@ LRESULT CALLBACK emuHookProc(int nCode, WPARAM wParam, LPARAM lParam)
             case WM_DISPLAYCHANGE:
                 LogEntry("display changed, wParam:%d, lParam:%08x\n", msg->wParam, msg->lParam);
                 // FIXME: implement update and dispatch of WT_ message
+                break;
+
+            default:
+                //LogEntry("i %04x\n", msg->message);
                 break;
         }
     }
@@ -1134,7 +1141,7 @@ BOOL emuWTEnable(HCTX hCtx, BOOL fEnable)
         if (fEnable) {
             enableProcessing();
         } else {
-            disableProcessing();
+            //disableProcessing();
         }
     }
     return TRUE;
