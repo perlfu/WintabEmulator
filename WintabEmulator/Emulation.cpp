@@ -22,11 +22,14 @@ of merchantability or fitness for any particular purpose.
 #define MI_SIGNATURE_MASK 0xFFFFFF00
 #define IsPenEvent(dw) (((dw) & MI_SIGNATURE_MASK) == MI_WP_SIGNATURE)
 
+
 #define MAX_STRING_BYTES LC_NAMELEN
 #define MAX_HOOKS 16
 #define MAX_POINTERS 4
+#define TIME_CLOSE_MS 2
 
 #define MOUSE_POINTER_ID 1
+
 
 static BOOL logging = FALSE;
 static BOOL debug = TRUE;
@@ -46,7 +49,9 @@ typedef struct _hook_t {
     DWORD thread;
 } hook_t;
 
+
 static BOOL enabled = FALSE;
+static BOOL processing = FALSE;
 static HMODULE module = NULL;
 
 static HWND window = NULL;
@@ -64,6 +69,7 @@ static UINT screen_width = 0;
 
 static LOGCONTEXTA default_context;
 static LPLOGCONTEXTA context = NULL;
+
 
 static void init_context(LOGCONTEXTA *ctx)
 {
@@ -110,7 +116,8 @@ static BOOL update_screen_metrics(LOGCONTEXTA *ctx)
     int width = screen_width = GetSystemMetrics(SM_CXSCREEN);
     int height = screen_height = GetSystemMetrics(SM_CYSCREEN);
 
-    LogEntry("screen metrics, width: %d, height: %d\n", width, height);
+    if (logging)
+        LogEntry("screen metrics, width: %d, height: %d\n", width, height);
 
     if (ctx->lcInExtX != width) {
         ctx->lcInExtX = width;
@@ -227,10 +234,14 @@ static UINT copy_contexta(LOGCONTEXTA *dst, LOGCONTEXTA *src)
 
 static void _allocate_queue(void)
 {
+    UINT queue_bytes = sizeof(packet_data_t) * q_length;
+    
     if (queue) {
         free(queue);
     }
-    queue = (packet_data_t *) malloc(sizeof(packet_data_t) * q_length);
+
+    queue = (packet_data_t *) malloc(queue_bytes);
+    memset(queue, 0, queue_bytes);
     q_start = 0;
     q_end = 0;
 }
@@ -272,12 +283,20 @@ static UINT queue_size(void)
     }
 }
 
+static inline BOOL time_is_close(LONG a, LONG b)
+{
+    LONG d = (a - b);
+    d *= d;
+    return (d <= (TIME_CLOSE_MS * TIME_CLOSE_MS));
+}
+
 // XXX: only call this when holding the queue lock
 static BOOL duplicate_packet(packet_data_t *pkt)
 {
     UINT idx = (q_start + (queue_size() - 1)) % q_length;
     return (pkt->x == queue[idx].x)
         && (pkt->y == queue[idx].y)
+        && time_is_close(pkt->time, queue[idx].time)
         && (pkt->pressure == queue[idx].pressure)
         && (pkt->contact == queue[idx].contact)
         && (pkt->buttons == queue[idx].buttons);
@@ -537,13 +556,13 @@ static void LogPacket(packet_data_t *pkt)
         pkt->pressure);
 }
 
-static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, LPMSG msg)
+static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL leavingWindow, LPMSG msg)
 {
     const UINT n_buttons = 5;
     POINTER_PEN_INFO info;
     packet_data_t pkt;
     BOOL buttons[n_buttons];
-    BOOL contact;
+    BOOL contact = FALSE;
     BOOL ret;
     UINT i;
     
@@ -552,12 +571,14 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, LPMS
     
     if (pointerType == PT_PEN) {
         ret = GetPointerPenInfo(pointerId, &info);
-        buttons[0] = IS_POINTER_FIRSTBUTTON_WPARAM(msg->wParam);
-        buttons[1] = IS_POINTER_SECONDBUTTON_WPARAM(msg->wParam);
-        buttons[2] = IS_POINTER_THIRDBUTTON_WPARAM(msg->wParam);
-        buttons[3] = IS_POINTER_FOURTHBUTTON_WPARAM(msg->wParam);
-        buttons[4] = IS_POINTER_FIFTHBUTTON_WPARAM(msg->wParam);
-        contact = IS_POINTER_INCONTACT_WPARAM(msg->wParam);
+        if (!leavingWindow) {
+            buttons[0] = IS_POINTER_FIRSTBUTTON_WPARAM(msg->wParam);
+            buttons[1] = IS_POINTER_SECONDBUTTON_WPARAM(msg->wParam);
+            buttons[2] = IS_POINTER_THIRDBUTTON_WPARAM(msg->wParam);
+            buttons[3] = IS_POINTER_FOURTHBUTTON_WPARAM(msg->wParam);
+            buttons[4] = IS_POINTER_FIFTHBUTTON_WPARAM(msg->wParam);
+            contact = IS_POINTER_INCONTACT_WPARAM(msg->wParam);
+        }
     } else {
         ret = GetPointerInfo(pointerId, &(info.pointerInfo));
         info.penFlags   = 0;
@@ -566,14 +587,17 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, LPMS
         info.rotation   = 0;
         info.tiltX      = 0;
         info.tiltY      = 0;
-        buttons[0] = (info.pointerInfo.pointerFlags & POINTER_FLAG_SECONDBUTTON) == POINTER_FLAG_FIRSTBUTTON;
-        buttons[1] = (info.pointerInfo.pointerFlags & POINTER_FLAG_THIRDBUTTON) == POINTER_FLAG_THIRDBUTTON;
-        contact = 
-            ((info.pointerInfo.pointerFlags & POINTER_FLAG_FIRSTBUTTON)) ||
-            (buttons[0] || buttons[1] || buttons[2]);
+        if (!leavingWindow) {
+            buttons[0] = (info.pointerInfo.pointerFlags & POINTER_FLAG_SECONDBUTTON) == POINTER_FLAG_SECONDBUTTON;
+            buttons[1] = (info.pointerInfo.pointerFlags & POINTER_FLAG_THIRDBUTTON) == POINTER_FLAG_THIRDBUTTON;
+            contact = 
+                (!!(info.pointerInfo.pointerFlags & POINTER_FLAG_FIRSTBUTTON)) ||
+                (buttons[0] || buttons[1] || buttons[2]);
+        }
     }
     if (!ret) {
-        LogEntry("failed to get pointer info for %x\n", pointerId);
+        if (logging)
+            LogEntry("failed to get pointer info for %x\n", pointerId);
         return FALSE;
     }
 
@@ -585,14 +609,16 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, LPMS
     pkt.time    = info.pointerInfo.dwTime;
     pkt.buttons = (buttons[2] ? SBN_LCLICK : 0) 
                 | (buttons[0] ? SBN_RCLICK : 0)
-                | (buttons[1] ? SBN_MCLICK : 0); // FIXME
+                | (buttons[1] ? SBN_MCLICK : 0); // FIXME: check
 
     // do we need to do the following?
     // SkipPointerFrameMessages(info.pointerInfo.frameId);
 
     if (enqueue_packet(&pkt)) {
-        LogEntry("queued packet\n");
-        LogPacket(&pkt);
+        if (logging) {
+            LogEntry("queued packet\n");
+            LogPacket(&pkt);
+        }
         if (window)
             PostMessage(window, WT_PACKET, (WPARAM)pkt.serial, (LPARAM)context);
         return TRUE;
@@ -605,7 +631,8 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, LPMS
 static void eraseMessage(LPMSG msg)
 {
     // we can't actually delete messages, so change its type
-    LogEntry("erase %04x\n", msg->message);
+    if (logging && debug)
+        LogEntry("erase %04x\n", msg->message);
     msg->message = 0x0;
 }
 
@@ -625,28 +652,44 @@ LRESULT CALLBACK emuHookProc(int nCode, WPARAM wParam, LPARAM lParam)
             hook = hooks[i].handle;
     }
 
-    if (enabled && queue) {
+    if (enabled && processing && queue) {
         POINTER_INPUT_TYPE pointerType = PT_POINTER;
         UINT32 pointerId = MOUSE_POINTER_ID;
+        BOOL leavingWindow = FALSE;
+        BOOL ignore = FALSE;
         LPARAM ext;
 
         switch (msg->message) {
+            case WM_LBUTTONDBLCLK:
+            case WM_RBUTTONDBLCLK:
+            case WM_NCLBUTTONDBLCLK:
+            case WM_NCRBUTTONDBLCLK:
             case WM_MOUSEMOVE:
 			case WM_NCMOUSEMOVE:
-			case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
-			case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
-			case WM_NCLBUTTONDOWN: case WM_NCLBUTTONUP: case WM_NCLBUTTONDBLCLK:
-			case WM_NCRBUTTONDOWN: case WM_NCRBUTTONUP: case WM_NCRBUTTONDBLCLK:
-            case WM_NCMOUSELEAVE:
+			case WM_LBUTTONDOWN: case WM_LBUTTONUP:
+			case WM_RBUTTONDOWN: case WM_RBUTTONUP:
+			case WM_NCLBUTTONDOWN: case WM_NCLBUTTONUP:
+			case WM_NCRBUTTONDOWN: case WM_NCRBUTTONUP:
+            //case WM_NCMOUSELEAVE:
                 ext = GetMessageExtraInfo();
-                LogEntry("%p %04x wParam:%x lParam:%x ext:%x\n", hook, msg->message, msg->wParam, msg->lParam, ext);
-                //LogEntry(" x:%d y:%d\n", GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
+                //leavingWindow = (msg->message == WM_NCMOUSELEAVE);
+                
+                if (logging) {
+                    LogEntry("%p %p %04x wParam:%x lParam:%x ext:%x, ignore: %d\n", 
+                        hook, msg->hwnd, msg->message, msg->wParam, msg->lParam, ext, ignore);
+                    if (debug) {
+                        LogEntry(" x:%d y:%d\n", GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam));
+                    }
+                }
+                
                 if (IsPenEvent(ext) && (!(ext & 0x80))) {
                     // this is a pen event so hide it from the application
                     eraseMessage(msg);
                 } else if (debug) {
                     // emulate pointer (from mouse events)
-                    if (handleMessage(pointerId, pointerType, msg)) {
+                    if (ignore) {
+                        eraseMessage(msg);
+                    } else if (handleMessage(pointerId, pointerType, leavingWindow, msg)) {
                         eraseMessage(msg);
                     }
                 }
@@ -662,9 +705,11 @@ LRESULT CALLBACK emuHookProc(int nCode, WPARAM wParam, LPARAM lParam)
                 // only process message if this is a pen
                 if (GetPointerType(pointerId, &pointerType)) {
                     if (pointerType == PT_PEN) {
-                        LogEntry("%p %04x wParam:%x lParam:%x pointerId:%x pointerType:%x\n", hook, msg->message, msg->wParam, msg->lParam, pointerId, pointerType);
+                        if (logging) {
+                            LogEntry("%p %04x wParam:%x lParam:%x pointerId:%x pointerType:%x\n", hook, msg->message, msg->wParam, msg->lParam, pointerId, pointerType);
+                        }
                         // we are interested in this pointer
-                        if (handleMessage(pointerId, pointerType, msg)) {
+                        if (handleMessage(pointerId, pointerType, leavingWindow, msg)) {
                             eraseMessage(msg);
                         }
                     }
@@ -672,7 +717,9 @@ LRESULT CALLBACK emuHookProc(int nCode, WPARAM wParam, LPARAM lParam)
                 break;
 
             case WM_DISPLAYCHANGE:
-                LogEntry("display changed, wParam:%d, lParam:%08x\n", msg->wParam, msg->lParam);
+                if (logging) {
+                    LogEntry("display changed, wParam:%d, lParam:%08x\n", msg->wParam, msg->lParam);
+                }
                 // FIXME: implement update and dispatch of WT_ message
                 break;
 
@@ -723,7 +770,8 @@ static void installHook(int id, hook_t *hook)
         NULL,
         hook->thread
     );
-    LogEntry("hook %d, thread = %08x, handle = %p\n", id, hook->thread, hook->handle);
+    if (logging)
+        LogEntry("hook %d, thread = %08x, handle = %p\n", id, hook->thread, hook->handle);
 }
 
 static void installHooks(void)
@@ -767,7 +815,8 @@ void emuEnableThread(DWORD thread)
     if (!enabled)
         return;
     
-    LogEntry("emuEnableThread(%08x)\n", thread);
+    if (logging)
+        LogEntry("emuEnableThread(%08x)\n", thread);
 
     // find a free hook structure
     for (i = 0; i < MAX_HOOKS; ++i) {
@@ -792,7 +841,8 @@ void emuDisableThread(DWORD thread)
     if (!enabled)
         return;
     
-    LogEntry("emuDisableThread(%08x)\n", thread);
+    if (logging)
+        LogEntry("emuDisableThread(%08x)\n", thread);
     
     // find hook and remove it
     for (i = 0; i < MAX_HOOKS; ++i) {
@@ -808,14 +858,20 @@ void emuDisableThread(DWORD thread)
 
 static void enableProcessing(void)
 {
-    installHooks();
-    enabled = TRUE;
+    if (!enabled) {
+        installHooks();
+        enabled = TRUE;
+    }
+    processing = TRUE;
 }
 
-static void disableProcessing(void)
+static void disableProcessing(BOOL hard)
 {
-    uninstallHooks();
-	enabled = FALSE;
+    processing = FALSE;
+    if (hard) {
+        uninstallHooks();
+	    enabled = FALSE;
+    }
 }
 
 void emuSetModule(HMODULE hModule)
@@ -890,6 +946,7 @@ void emuInit(BOOL fLogging, BOOL fDebug)
     update_screen_metrics(&default_context);
 
     enabled = FALSE;
+    processing = FALSE;
     q_length = 128;
     allocate_queue();
 
@@ -1094,7 +1151,7 @@ BOOL emuWTClose(HCTX hCtx)
 {
     if (hCtx && ((LPVOID)hCtx == (LPVOID)context)) {
         if (enabled) {
-            disableProcessing();
+            disableProcessing(TRUE);
         }
         free(hCtx);
         context = NULL;
@@ -1137,11 +1194,11 @@ BOOL emuWTPacket(HCTX hCtx, UINT wSerial, LPVOID lpPkt)
 
 BOOL emuWTEnable(HCTX hCtx, BOOL fEnable)
 {
-    if (enabled != fEnable) {
+    if (processing != fEnable) {
         if (fEnable) {
             enableProcessing();
         } else {
-            //disableProcessing();
+            disableProcessing(FALSE);
         }
     }
     return TRUE;
