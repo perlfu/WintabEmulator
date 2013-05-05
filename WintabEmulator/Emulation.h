@@ -16,6 +16,7 @@ void emuEnableThread(DWORD dwThread);
 void emuDisableThread(DWORD dwThread);
 
 void emuInit(BOOL fLogging, BOOL fDebug);
+void emuShutdown(void);
 UINT emuWTInfoA(UINT wCategory, UINT nIndex, LPVOID lpOutput);
 UINT emuWTInfoW(UINT wCategory, UINT nIndex, LPVOID lpOutput);
 HCTX emuWTOpenA(HWND hWnd, LPLOGCONTEXTA lpLogCtx, BOOL fEnable);

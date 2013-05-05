@@ -8,19 +8,28 @@ of merchantability or fitness for any particular purpose.
 ------------------------------------------------------------------------------*/
 
 #include "stdafx.h"
+#include <tchar.h>
 #include <assert.h>
 
 #define API __declspec(dllexport) WINAPI
 #include "wintab.h"
 #include "Emulation.h"
 
-static FILE *fhLog      = NULL;
-static BOOL initialised = FALSE;
-static BOOL logging     = TRUE;
-static BOOL debug       = TRUE;
-static BOOL useEmulation= TRUE;
-static WTPKT packetData = 0;
-static WTPKT packetMode = 0;
+#define INI_FILE                _T("wintab.ini")
+#define DEFAULT_LOG_FILE        _T("wintab.txt")
+#define DEFAULT_WINTAB_DLL      _T("C:\\WINDOWS\\WINTAB32.DLL")
+
+static BOOL     initialised     = FALSE;
+
+static BOOL     logging         = TRUE;
+static BOOL     debug           = TRUE;
+static BOOL     useEmulation    = TRUE;
+static LPTSTR   logFile         = NULL;
+static LPTSTR   wintabDLL       = NULL;
+static FILE     *fhLog          = NULL;
+
+static WTPKT    packetData      = 0;
+static WTPKT    packetMode      = 0;
 
 #define WTAPI WINAPI
 
@@ -84,9 +93,9 @@ static WTMGRDEFCONTEXTEX origWTMgrDefContextEx = NULL;
 #define GETPROCADDRESS(type, func) \
 	orig##func = (type)GetProcAddress(hOrigWintab, #func);
 
-static BOOL LoadWintab(char *path)
+static BOOL LoadWintab(TCHAR *path)
 {
-	hOrigWintab = LoadLibraryA(path);
+	hOrigWintab = LoadLibrary(path);
 
 	if (!hOrigWintab) {
 		return FALSE;
@@ -161,7 +170,7 @@ static void UnloadWintab(void)
 
 static BOOL OpenLogFile(void)
 {
-	fopen_s (&fhLog, "wintab.txt", "a");
+	_tfopen_s (&fhLog, logFile, _T("a"));
 	return (fhLog != NULL ? TRUE : FALSE);
 }
 
@@ -491,10 +500,74 @@ static void LogBytes(LPVOID lpData, UINT nBytes)
 	fprintf(fhLog, "\n");
 }
 
-static void Init()
+static void getINIPath(TCHAR *out, UINT length)
+{
+    TCHAR pwd[MAX_PATH];
+    
+    GetCurrentDirectory(MAX_PATH, pwd);
+    _sntprintf_s(out, length, _TRUNCATE, _T("%s\\%s"), pwd, INI_FILE);
+}
+
+static void LoadSettings(void)
+{
+    const UINT stringLength = MAX_PATH;
+    TCHAR iniPath[MAX_PATH];
+    DWORD dwRet;
+    UINT nRet;
+
+    getINIPath(iniPath, MAX_PATH);
+    
+    nRet = GetPrivateProfileInt(
+        _T("Logging"),
+        _T("Mode"),
+        logging ? 1 : 0,
+        iniPath
+    );
+    logging = (nRet != 0);
+
+    logFile = (TCHAR *) malloc(sizeof(TCHAR) * stringLength);
+    dwRet = GetPrivateProfileString(
+        _T("Logging"),
+        _T("LogFile"),
+        DEFAULT_LOG_FILE,
+        logFile,
+        stringLength,
+        iniPath
+    );
+    
+    nRet = GetPrivateProfileInt(
+        _T("Emulation"),
+        _T("Mode"),
+        useEmulation ? 1 : 0,
+        iniPath
+    );
+    useEmulation = (nRet != 0);
+    
+    nRet = GetPrivateProfileInt(
+        _T("Emulation"),
+        _T("Debug"),
+        debug ? 1 : 0,
+        iniPath
+    );
+    debug = (nRet != 0);
+
+    wintabDLL = (TCHAR *) malloc(sizeof(TCHAR) * stringLength);
+    dwRet = GetPrivateProfileString(
+        _T("Emulation"),
+        _T("WintabDLL"),
+        DEFAULT_LOG_FILE,
+        wintabDLL,
+        stringLength,
+        iniPath
+    );
+}
+
+static void Init(void)
 {
     if (initialised)
         return;
+
+    LoadSettings();
 
     if (logging) {
 		logging = OpenLogFile();
@@ -508,12 +581,39 @@ static void Init()
     if (useEmulation) {
         emuInit(logging, debug);
     } else {
-        if (LoadWintab("C:\\Windows\\System32\\wintab32.dll")) {
-        } else if (LoadWintab("C:\\Windows\\wintab32.dll")) {
-        }
+        LoadWintab(wintabDLL);
     }
 
     initialised = TRUE;
+}
+
+// FIXME arrange for this to be called?
+static void Shutdown(void)
+{
+    if (logging)
+        LogEntry("shutdown started\n");
+    
+    if (useEmulation) {
+        emuShutdown();
+    } else {
+        UnloadWintab();
+    }
+    
+    if (logging)
+        LogEntry("shutdown finished\n");
+    
+    if (fhLog) {
+        fclose(fhLog);
+        fhLog = NULL;
+    }
+    if (logFile) {
+        free(logFile);
+        logFile = NULL;
+    }
+    if (wintabDLL) {
+        free(wintabDLL);
+        wintabDLL = NULL;
+    }
 }
 
 UINT API WTInfoA(UINT wCategory, UINT nIndex, LPVOID lpOutput)

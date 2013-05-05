@@ -953,6 +953,22 @@ void emuInit(BOOL fLogging, BOOL fDebug)
 	EnableMouseInPointer(TRUE);
 }
 
+void emuShutdown(void)
+{
+    if (enabled)
+        disableProcessing(TRUE);
+
+    release_queue();
+
+    window = NULL;
+    module = NULL;
+
+    if (context) {
+        free(context);
+        context = NULL;
+    }
+}
+
 static UINT emuWTInfo(BOOL fUnicode, UINT wCategory, UINT nIndex, LPVOID lpOutput)
 {
     UINT ret = 0;
