@@ -41,7 +41,7 @@ typedef struct _packet_data_t {
 	DWORD x, y;
     DWORD buttons;
     UINT pressure;
-    UINT pad[1];
+    UINT pad[9];
 } packet_data_t;
 
 typedef struct _hook_t {
