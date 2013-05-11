@@ -588,11 +588,10 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL
         info.tiltX      = 0;
         info.tiltY      = 0;
         if (!leavingWindow) {
-            buttons[0] = (info.pointerInfo.pointerFlags & POINTER_FLAG_SECONDBUTTON) == POINTER_FLAG_SECONDBUTTON;
-            buttons[1] = (info.pointerInfo.pointerFlags & POINTER_FLAG_THIRDBUTTON) == POINTER_FLAG_THIRDBUTTON;
-            contact = 
-                (!!(info.pointerInfo.pointerFlags & POINTER_FLAG_FIRSTBUTTON)) ||
-                (buttons[0] || buttons[1] || buttons[2]);
+            buttons[0] = (info.pointerInfo.pointerFlags & POINTER_FLAG_FIRSTBUTTON) == POINTER_FLAG_FIRSTBUTTON;
+            buttons[1] = (info.pointerInfo.pointerFlags & POINTER_FLAG_SECONDBUTTON) == POINTER_FLAG_SECONDBUTTON;
+            buttons[2] = (info.pointerInfo.pointerFlags & POINTER_FLAG_THIRDBUTTON) == POINTER_FLAG_THIRDBUTTON;
+            contact = (buttons[0] || buttons[1] || buttons[2]);
         }
     }
     if (!ret) {
@@ -607,9 +606,9 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL
     pkt.y       = context->lcInExtY - info.pointerInfo.ptPixelLocation.y;
     pkt.pressure= contact ? info.pressure : 0;
     pkt.time    = info.pointerInfo.dwTime;
-    pkt.buttons = (buttons[2] ? SBN_LCLICK : 0) 
-                | (buttons[0] ? SBN_RCLICK : 0)
-                | (buttons[1] ? SBN_MCLICK : 0); // FIXME: check
+    pkt.buttons = (buttons[0] ? SBN_LCLICK : 0) 
+                | (buttons[1] ? SBN_RCLICK : 0)
+                | (buttons[2] ? SBN_MCLICK : 0);
 
     // do we need to do the following?
     // SkipPointerFrameMessages(info.pointerInfo.frameId);
