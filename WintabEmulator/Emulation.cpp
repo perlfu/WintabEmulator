@@ -52,6 +52,7 @@ typedef struct _hook_t {
 
 static BOOL enabled = FALSE;
 static BOOL processing = FALSE;
+static BOOL overrideFeedback = TRUE;
 static HMODULE module = NULL;
 
 static HWND window = NULL;
@@ -635,6 +636,53 @@ static void eraseMessage(LPMSG msg)
     msg->message = 0x0;
 }
 
+static void setWindowFeedback(HWND hWnd)
+{
+    FEEDBACK_TYPE settings[] = {
+        FEEDBACK_PEN_BARRELVISUALIZATION,
+        FEEDBACK_PEN_TAP,
+        FEEDBACK_PEN_DOUBLETAP,
+        FEEDBACK_PEN_PRESSANDHOLD,
+        FEEDBACK_PEN_RIGHTTAP
+    };
+	BOOL setting;
+    BOOL ret;
+    int i;
+
+    if (logging)
+        LogEntry("configuring feedback for window: %p\n", hWnd);
+    
+    for (i = 0; i < (sizeof(settings) / sizeof(FEEDBACK_TYPE)); ++i) {
+        setting = FALSE;
+        ret = SetWindowFeedbackSetting(hWnd,
+            settings[i],
+            0,
+            sizeof(BOOL), 
+            &setting
+        );
+        if (logging)
+            LogEntry(" setting: %d, ret: %d\n", settings[i], ret);
+    }
+}
+
+static BOOL CALLBACK setFeedbackForThreadWindow(HWND hWnd, LPARAM lParam)
+{
+    setWindowFeedback(hWnd);
+    return TRUE;
+}
+
+static void setFeedbackForWindows(void)
+{
+    if (overrideFeedback) {
+        // enumerate windows of each thread (previouly detected)
+        int i;
+        for (i = 0; i < MAX_HOOKS; ++i) {
+            if (hooks[i].thread)
+                EnumThreadWindows(hooks[i].thread, setFeedbackForThreadWindow, NULL);
+        }
+    }
+}
+
 LRESULT CALLBACK emuHookProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
     //LPCWPSTRUCT msg = (LPCWPSTRUCT)lParam;
@@ -791,6 +839,9 @@ static void installHooks(void)
     for (i = 0; i < n_hooks; ++i) {
         installHook(i, &(hooks[i]));
     }
+
+    // setup feedback overrides
+    setFeedbackForWindows();
 }
 
 static void uninstallHooks(void)
@@ -825,6 +876,7 @@ void emuEnableThread(DWORD thread)
         } else if (hooks[i].thread == 0) {
             hooks[i].thread = thread;
             installHook(i, &(hooks[i]));
+            // FIXME: override windows feedback?
             return;
         }
     }
