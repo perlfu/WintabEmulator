@@ -584,7 +584,7 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL
         ret = GetPointerInfo(pointerId, &(info.pointerInfo));
         info.penFlags   = 0;
         info.penMask    = 0;
-        info.pressure   = 100;
+        info.pressure   = 0;
         info.rotation   = 0;
         info.tiltX      = 0;
         info.tiltY      = 0;
@@ -593,6 +593,7 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL
             buttons[1] = (info.pointerInfo.pointerFlags & POINTER_FLAG_SECONDBUTTON) == POINTER_FLAG_SECONDBUTTON;
             buttons[2] = (info.pointerInfo.pointerFlags & POINTER_FLAG_THIRDBUTTON) == POINTER_FLAG_THIRDBUTTON;
             contact = (buttons[0] || buttons[1] || buttons[2]);
+            info.pressure = contact ? 100 : 0;
         }
     }
     if (!ret) {
@@ -605,7 +606,7 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL
     pkt.contact = contact;
     pkt.x       = info.pointerInfo.ptPixelLocation.x;
     pkt.y       = context->lcInExtY - info.pointerInfo.ptPixelLocation.y;
-    pkt.pressure= contact ? info.pressure : 0;
+    pkt.pressure= info.pressure;
     pkt.time    = info.pointerInfo.dwTime;
     pkt.buttons = (buttons[0] ? SBN_LCLICK : 0) 
                 | (buttons[1] ? SBN_RCLICK : 0)
