@@ -1,0 +1,6 @@
+-- TODO --
+
+ * Make feedback overriding configurable
+ * Pressure curve modification
+ * Cursor adjustment
+ * Override tablet PC gestures
