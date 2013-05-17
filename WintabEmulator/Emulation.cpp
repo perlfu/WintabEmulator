@@ -557,6 +557,57 @@ static void LogPacket(packet_data_t *pkt)
         pkt->pressure);
 }
 
+static void adjustPosition(packet_data_t *pkt)
+{
+    pkt->x = pkt->x + config.shiftX;
+    pkt->y = pkt->y + config.shiftY;
+}
+
+static void adjustPressure(packet_data_t *pkt)
+{
+    if (config.pressureCurve) {
+        double p0, p1, v0, v1;
+        double v = (double) pkt->pressure;
+        int i0, i1;
+
+        for (i1 = 1; i1 < 4; ++i1) {
+            if (config.pressurePoint[i1] > pkt->pressure)
+                break;
+        }
+        i0 = i1 - 1;
+
+        p0 = (double) config.pressurePoint[i0];
+        p1 = (double) config.pressurePoint[i1];
+        v0 = (double) config.pressureValue[i0];
+        v1 = (double) config.pressureValue[i1];
+
+        v0 = v0 * ((p1 - v) / (p1 - p0));
+        v1 = v1 * ((v - p0) / (p1 - p0));
+
+        pkt->pressure = (UINT)(v0 + v1);
+    }
+    if (config.pressureExpand) {
+        double midPoint = (double)(config.pressureMin + ((config.pressureMax - config.pressureMin) / 2));
+        double expand = ((double)(config.pressureMax - config.pressureMin)) / 1024.0;
+        double value = (double)pkt->pressure;
+
+        value -= midPoint;
+        value /= expand;
+        value += 512.0;
+        if (value < 0.0)
+            value = 0.0;
+        else if (value > 1023.0)
+            value = 1023.0;
+
+        pkt->pressure = (UINT) value;
+    } else {
+        if (pkt->pressure < config.pressureMin)
+            pkt->pressure = config.pressureMin;
+        else if (pkt->pressure > config.pressureMax)
+            pkt->pressure = config.pressureMax;
+    }
+}
+
 static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL leavingWindow, LPMSG msg)
 {
     const UINT n_buttons = 5;
@@ -614,6 +665,9 @@ static BOOL handleMessage(UINT32 pointerId, POINTER_INPUT_TYPE pointerType, BOOL
 
     // do we need to do the following?
     // SkipPointerFrameMessages(info.pointerInfo.frameId);
+
+    adjustPosition(&pkt);
+    adjustPressure(&pkt);
 
     if (enqueue_packet(&pkt)) {
         if (logging) {

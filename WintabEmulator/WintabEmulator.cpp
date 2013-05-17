@@ -514,7 +514,7 @@ static void SetDefaults(emu_settings_t *settings)
     settings->disableGestures       = TRUE;
     settings->shiftX                = 0;
     settings->shiftY                = 0;
-    settings->pressureExpand        = FALSE;
+    settings->pressureExpand        = TRUE;
     settings->pressureMin           = 0;
     settings->pressureMax           = 1023;
     settings->pressureCurve         = FALSE;
