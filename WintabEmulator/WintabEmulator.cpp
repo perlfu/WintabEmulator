@@ -508,7 +508,29 @@ static void getINIPath(TCHAR *out, UINT length)
     _sntprintf_s(out, length, _TRUNCATE, _T("%s\\%s"), pwd, INI_FILE);
 }
 
-static void LoadSettings(void)
+static void SetDefaults(emu_settings_t *settings)
+{
+    settings->disableFeedback       = TRUE;
+    settings->disableGestures       = TRUE;
+    settings->shiftX                = 0;
+    settings->shiftY                = 0;
+    settings->pressureExpand        = FALSE;
+    settings->pressureMin           = 0;
+    settings->pressureMax           = 1023;
+    settings->pressureCurve         = FALSE;
+    settings->pressurePoint[0]      = 0;
+    settings->pressurePoint[1]      = 253;
+    settings->pressurePoint[2]      = 511;
+    settings->pressurePoint[3]      = 767;
+    settings->pressurePoint[4]      = 1023;
+    settings->pressureValue[0]      = 0;
+    settings->pressureValue[1]      = 253;
+    settings->pressureValue[2]      = 511;
+    settings->pressureValue[3]      = 767;
+    settings->pressureValue[4]      = 1023;
+}
+
+static void LoadSettings(emu_settings_t *settings)
 {
     const UINT stringLength = MAX_PATH;
     TCHAR iniPath[MAX_PATH];
@@ -560,14 +582,125 @@ static void LoadSettings(void)
         stringLength,
         iniPath
     );
+    
+    nRet = GetPrivateProfileInt(
+        _T("Emulation"),
+        _T("DisableFeedback"),
+        settings->disableFeedback ? 1 : 0,
+        iniPath
+    );
+    settings->disableFeedback = (nRet != 0);
+    
+    nRet = GetPrivateProfileInt(
+        _T("Emulation"),
+        _T("DisableGestures"),
+        settings->disableGestures ? 1 : 0,
+        iniPath
+    );
+    settings->disableGestures = (nRet != 0);
+    
+    // Adjustment of positions
+    settings->shiftX = GetPrivateProfileInt(
+        _T("Adjust"), _T("ShiftX"),
+        settings->shiftX,
+        iniPath
+    );
+    settings->shiftY = GetPrivateProfileInt(
+        _T("Adjust"), _T("ShiftY"),
+        settings->shiftY,
+        iniPath
+    );
+    
+    // Pressure clamping
+    nRet = GetPrivateProfileInt(
+        _T("Adjust"),
+        _T("PressureExpand"),
+        settings->pressureExpand ? 1 : 0,
+        iniPath
+    );
+    settings->pressureExpand = (nRet != 0);
+    
+    settings->pressureMin = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureMin"),
+        settings->pressureMin,
+        iniPath
+    );
+    settings->pressureMax = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureMax"),
+        settings->pressureMax,
+        iniPath
+    );
+
+    // Pressure curve
+    nRet = GetPrivateProfileInt(
+        _T("Adjust"),
+        _T("PressureCurve"),
+        settings->pressureCurve ? 1 : 0,
+        iniPath
+    );
+    settings->pressureCurve = (nRet != 0);
+
+    settings->pressurePoint[0] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP0"),
+        settings->pressurePoint[0],
+        iniPath
+    );
+    settings->pressureValue[0] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP0V"),
+        settings->pressureValue[0],
+        iniPath
+    );
+    settings->pressurePoint[1] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP1"),
+        settings->pressurePoint[1],
+        iniPath
+    );
+    settings->pressureValue[1] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP1V"),
+        settings->pressureValue[1],
+        iniPath
+    );
+    settings->pressurePoint[2] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP2"),
+        settings->pressurePoint[2],
+        iniPath
+    );
+    settings->pressureValue[2] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP2V"),
+        settings->pressureValue[2],
+        iniPath
+    );
+    settings->pressurePoint[3] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP3"),
+        settings->pressurePoint[3],
+        iniPath
+    );
+    settings->pressureValue[3] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP3V"),
+        settings->pressureValue[3],
+        iniPath
+    );
+    settings->pressurePoint[4] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP4"),
+        settings->pressurePoint[4],
+        iniPath
+    );
+    settings->pressureValue[4] = GetPrivateProfileInt(
+        _T("Adjust"), _T("PressureCurveP4V"),
+        settings->pressureValue[4],
+        iniPath
+    );
 }
 
 static void Init(void)
 {
+    emu_settings_t settings;
+
     if (initialised)
         return;
 
-    LoadSettings();
+    SetDefaults(&settings);
+    LoadSettings(&settings);
 
     if (logging) {
 		logging = OpenLogFile();
@@ -579,7 +712,7 @@ static void Init(void)
     );
 
     if (useEmulation) {
-        emuInit(logging, debug);
+        emuInit(logging, debug, &settings);
     } else {
         LoadWintab(wintabDLL);
     }

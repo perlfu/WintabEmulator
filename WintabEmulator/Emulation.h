@@ -11,11 +11,24 @@ of merchantability or fitness for any particular purpose.
 
 #include "wintab.h"
 
+typedef struct _emu_settings_t {
+    BOOL disableFeedback;
+    BOOL disableGestures;
+    INT shiftX;
+    INT shiftY;
+    BOOL pressureExpand;
+    UINT pressureMin;
+    UINT pressureMax;
+    BOOL pressureCurve;
+    UINT pressurePoint[5];
+    UINT pressureValue[5];
+} emu_settings_t;
+
 void emuSetModule(HMODULE hModule);
 void emuEnableThread(DWORD dwThread);
 void emuDisableThread(DWORD dwThread);
 
-void emuInit(BOOL fLogging, BOOL fDebug);
+void emuInit(BOOL fLogging, BOOL fDebug, emu_settings_t *settings);
 void emuShutdown(void);
 UINT emuWTInfoA(UINT wCategory, UINT nIndex, LPVOID lpOutput);
 UINT emuWTInfoW(UINT wCategory, UINT nIndex, LPVOID lpOutput);

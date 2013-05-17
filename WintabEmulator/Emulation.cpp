@@ -52,7 +52,7 @@ typedef struct _hook_t {
 
 static BOOL enabled = FALSE;
 static BOOL processing = FALSE;
-static BOOL overrideFeedback = TRUE;
+static emu_settings_t config;
 static HMODULE module = NULL;
 
 static HWND window = NULL;
@@ -674,7 +674,7 @@ static BOOL CALLBACK setFeedbackForThreadWindow(HWND hWnd, LPARAM lParam)
 
 static void setFeedbackForWindows(void)
 {
-    if (overrideFeedback) {
+    if (config.disableFeedback) {
         // enumerate windows of each thread (previouly detected)
         int i;
         for (i = 0; i < MAX_HOOKS; ++i) {
@@ -987,11 +987,13 @@ static void findPointers(void)
 }
 #endif
 
-void emuInit(BOOL fLogging, BOOL fDebug)
+void emuInit(BOOL fLogging, BOOL fDebug, emu_settings_t *settings)
 {
     logging = fLogging;
     debug = fDebug;
     
+    memcpy(&config, settings, sizeof(emu_settings_t));
+
     InitializeCriticalSection(&q_lock);
 
     init_context(&default_context);
