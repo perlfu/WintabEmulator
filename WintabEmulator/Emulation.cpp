@@ -75,8 +75,8 @@ static LPLOGCONTEXTA context = NULL;
 static void init_context(LOGCONTEXTA *ctx)
 {
     strncpy_s(ctx->lcName, "Windows", LC_NAMELEN);
-    ctx->lcOptions  = 0;
-    ctx->lcStatus   = CXO_SYSTEM | CXO_PEN;
+    ctx->lcOptions  = CXO_SYSTEM | CXO_PEN;
+    ctx->lcStatus   = 0;
     ctx->lcLocks    = 0;
     ctx->lcMsgBase  = 0x7ff0;
     ctx->lcDevice   = 0;
