@@ -136,6 +136,11 @@ static BOOL update_screen_metrics(LOGCONTEXTA *ctx)
         ctx->lcOutExtX  = ctx->lcInExtX;
         ctx->lcOutExtY  = ctx->lcInExtY;
         ctx->lcOutExtZ  = ctx->lcInExtZ;
+		
+		ctx->lcSysOrgX  = ctx->lcInOrgX;
+		ctx->lcSysOrgY  = ctx->lcInOrgY;
+		ctx->lcSysExtX  = ctx->lcInExtX;
+		ctx->lcSysExtY  = ctx->lcInExtY;
     }
 
     return changed;
